@@ -1,0 +1,10 @@
+<resources>
+    <string name="app_name">Missed Call Forwarder</string>
+
+    <!-- Notification channel -->
+    <string name="channel_status_name">Forwarding status</string>
+    <string name="channel_status_desc">Shows when a missed call is forwarded, suppressed, or fails.</string>
+
+    <!-- Default message template. Placeholders: {number} {time} {wa} -->
+    <string name="default_template">Missed call from {number} at {time}\nWhatsApp: {wa}</string>
+</resources>
