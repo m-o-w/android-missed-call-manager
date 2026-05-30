@@ -54,7 +54,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 onResult("Set and save a destination number first")
                 return@launch
             }
-            val body = MessageBuilder.build(sampleNumber, System.currentTimeMillis(), s)
+            val body = MessageBuilder.build(getApplication(), sampleNumber, System.currentTimeMillis(), s)
             val prefixed = "[TEST] $body"
             when (val r = SmsSender.send(getApplication(), s.destinationNumber, prefixed, s.sendSubscriptionId)) {
                 is SmsResult.Success -> onResult("Test SMS sent to ${s.destinationNumber}")

@@ -32,6 +32,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.missedcallforwarder.core.DeviceRegion
 import com.example.missedcallforwarder.core.SimInfo
 import com.example.missedcallforwarder.core.SimOption
 import com.example.missedcallforwarder.data.ForwardLog
@@ -86,9 +87,10 @@ private fun SettingsForm(
     var draft by remember(saved) { mutableStateOf(saved) }
     val dirty = draft != saved
 
-    var permissionsGranted by remember { mutableStateOf(hasAllPermissions(context)) }
+    var permissionsGranted by remember { mutableStateOf(hasEssentialPermissions(context)) }
     var batteryExempt by remember { mutableStateOf(isBatteryExempt(context)) }
     var simOptions by remember { mutableStateOf(SimInfo.options(context)) }
+    val detectedRegion = remember(permissionsGranted) { DeviceRegion.detect(context) }
 
     // Re-check permission + battery state every time the app returns to the
     // foreground, so the prompt cards hide when satisfied and reappear if the
@@ -97,7 +99,7 @@ private fun SettingsForm(
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
-                permissionsGranted = hasAllPermissions(context)
+                permissionsGranted = hasEssentialPermissions(context)
                 batteryExempt = isBatteryExempt(context)
                 simOptions = SimInfo.options(context)
             }
@@ -108,8 +110,10 @@ private fun SettingsForm(
 
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
-    ) { result ->
-        permissionsGranted = result.values.all { it } && hasAllPermissions(context)
+    ) { _ ->
+        // Re-check from the system rather than trusting the result map, and gate
+        // on essential permissions only (optional ones must not block the app).
+        permissionsGranted = hasEssentialPermissions(context)
         // SIM details require READ_PHONE_STATE; refresh once it's granted.
         simOptions = SimInfo.options(context)
     }
@@ -157,8 +161,9 @@ private fun SettingsForm(
                 ElevatedCard {
                     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text("Permissions needed", style = MaterialTheme.typography.titleMedium)
-                        Text("Phone state, call log, and SMS access are required for forwarding to work.")
-                        Button(onClick = { permissionLauncher.launch(Permissions.required()) }) {
+                        Text("Phone state, call log, and SMS access are required for forwarding. " +
+                            "Notifications are optional but recommended for status alerts.")
+                        Button(onClick = { permissionLauncher.launch(Permissions.all()) }) {
                             Text("Grant permissions")
                         }
                     }
@@ -203,7 +208,17 @@ private fun SettingsForm(
                     OutlinedTextField(
                         value = draft.defaultCountryCode,
                         onValueChange = { v -> draft = draft.copy(defaultCountryCode = v) },
-                        label = { Text("Default country (ISO, e.g. IN, US) for wa.me links") },
+                        label = { Text("Country code override (optional)") },
+                        placeholder = { Text(detectedRegion ?: "auto") },
+                        supportingText = {
+                            Text(
+                                if (detectedRegion != null)
+                                    "Auto-detected: $detectedRegion. Only set this if caller numbers " +
+                                        "come from a different country."
+                                else
+                                    "Used only for local-format numbers that lack a country code."
+                            )
+                        },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth()
                     )
@@ -411,8 +426,8 @@ private fun Settings.normalized(): Settings = copy(
     defaultCountryCode = defaultCountryCode.trim().uppercase()
 )
 
-private fun hasAllPermissions(context: Context): Boolean =
-    Permissions.required().all {
+private fun hasEssentialPermissions(context: Context): Boolean =
+    Permissions.essential.all {
         ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED
     }
 

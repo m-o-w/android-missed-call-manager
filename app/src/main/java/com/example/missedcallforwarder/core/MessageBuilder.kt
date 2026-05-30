@@ -1,5 +1,6 @@
 package com.example.missedcallforwarder.core
 
+import android.content.Context
 import com.example.missedcallforwarder.data.Settings
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -13,11 +14,13 @@ object MessageBuilder {
 
     private val timeFmt = SimpleDateFormat("HH:mm", Locale.getDefault())
 
-    fun build(number: String, timeMillis: Long, settings: Settings): String {
+    fun build(context: Context, number: String, timeMillis: Long, settings: Settings): String {
         val numberText = number.ifBlank { "unknown" }
         val timeText = timeFmt.format(Date(timeMillis))
         val waUrl = if (settings.includeWhatsAppLink) {
-            PhoneNumbers.waMeUrl(number, settings.defaultCountryCode) ?: "(unavailable)"
+            // Use the user override if set, else auto-detect from SIM/network.
+            val region = DeviceRegion.resolveRegion(context, settings.defaultCountryCode)
+            PhoneNumbers.waMeUrl(number, region) ?: "(unavailable)"
         } else {
             ""
         }

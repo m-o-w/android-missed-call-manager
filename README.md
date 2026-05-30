@@ -46,8 +46,10 @@ Requirements: JDK 17, Android SDK 34. The APK is `app/build/outputs/apk/debug/`.
 2. Open the app and tap **Grant permissions** (phone state, call log, SMS,
    notifications).
 3. Set the **Destination number** (where alerts go).
-4. Set **Default country** (ISO code like `IN`, `US`) so local-format caller
-   numbers convert correctly into `wa.me` links.
+4. Set **Country code override** only if needed — the app auto-detects your
+   region from the SIM/network, so local-format caller numbers usually convert
+   into `wa.me` links correctly. Set it only if callers come from a different
+   country than your SIM.
 5. Adjust the **dedup minutes** and **message template** if you like.
 6. Flip **Forwarding enabled** on.
 7. Tap **Battery optimization settings** and exempt the app. On Xiaomi / Oppo /

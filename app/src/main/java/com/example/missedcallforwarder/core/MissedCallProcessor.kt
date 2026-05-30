@@ -81,7 +81,7 @@ class MissedCallProcessor(
     }
 
     private fun buildMessage(call: MissedCall, settings: Settings): String =
-        MessageBuilder.build(call.number, call.time, settings)
+        MessageBuilder.build(appContext, call.number, call.time, settings)
 
     private suspend fun record(
         call: MissedCall,
