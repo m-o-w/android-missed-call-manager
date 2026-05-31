@@ -20,12 +20,18 @@ data class Settings(
     val greeting: String = DEFAULT_GREETING,
     val dedupMinutes: Int = 60,
     val dailyMessageCap: Int = 0,        // 0 = unlimited; else max messages per rolling 24h
-    val defaultCountryCode: String = ""  // ISO region override (e.g. "IN"); blank = auto-detect
+    val defaultCountryCode: String = "", // ISO region override (e.g. "IN"); blank = auto-detect
+    val simFilter: Int = SIM_BOTH        // which SIM's missed calls to respond to
 ) {
     companion object {
         const val DEFAULT_TEMPLATE =
             "\uD83D\uDCDE Missed business call\nFrom: {number}\nTime: {time}\nOpen WhatsApp: {wa}"
         const val DEFAULT_GREETING = "Hi, sorry we missed your call. How can we help?"
+
+        // simFilter values
+        const val SIM_BOTH = 0
+        const val SIM_1 = 1
+        const val SIM_2 = 2
     }
 }
 
@@ -40,6 +46,7 @@ class SettingsStore(private val context: Context) {
         val DEDUP = intPreferencesKey("dedup_minutes")
         val DAILY_CAP = intPreferencesKey("daily_message_cap")
         val REGION = stringPreferencesKey("default_region")
+        val SIM_FILTER = intPreferencesKey("sim_filter")
     }
 
     private fun read(p: androidx.datastore.preferences.core.Preferences) = Settings(
@@ -50,7 +57,8 @@ class SettingsStore(private val context: Context) {
         greeting = p[Keys.GREETING] ?: Settings.DEFAULT_GREETING,
         dedupMinutes = p[Keys.DEDUP] ?: 60,
         dailyMessageCap = p[Keys.DAILY_CAP] ?: 0,
-        defaultCountryCode = p[Keys.REGION] ?: ""
+        defaultCountryCode = p[Keys.REGION] ?: "",
+        simFilter = p[Keys.SIM_FILTER] ?: Settings.SIM_BOTH
     )
 
     val settings: Flow<Settings> = context.dataStore.data.map { read(it) }
@@ -66,6 +74,7 @@ class SettingsStore(private val context: Context) {
             p[Keys.DEDUP] = next.dedupMinutes
             p[Keys.DAILY_CAP] = next.dailyMessageCap
             p[Keys.REGION] = next.defaultCountryCode
+            p[Keys.SIM_FILTER] = next.simFilter
         }
     }
 }

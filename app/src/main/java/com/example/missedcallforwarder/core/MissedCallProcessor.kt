@@ -12,10 +12,19 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 
+/** What the worker should do after a processing attempt. */
+sealed class ProcessOutcome {
+    /** Terminal — already recorded; nothing more to do. */
+    object Handled : ProcessOutcome()
+    /** Transient send failure — worker should retry later (not yet recorded). */
+    data class Retry(val reason: String) : ProcessOutcome()
+}
+
 /**
- * Decides what to do with a detected missed call: dedup, daily cap, build the
- * Telegram message (with a pre-filled wa.me link), deliver it, and log the
- * outcome.
+ * Decides what to do with a detected missed call: gate (enabled / SIM filter /
+ * dedup / daily cap), build the Telegram message, attempt ONE send, and report
+ * an outcome. Retrying transient failures is delegated to WorkManager (see
+ * SendWorker) so it survives process death and waits for connectivity.
  */
 class MissedCallProcessor(
     private val appContext: Context,
@@ -23,17 +32,36 @@ class MissedCallProcessor(
     private val settingsStore: SettingsStore
 ) {
 
-    suspend fun process(call: MissedCall) {
+    /**
+     * Runs the pipeline once. [isFinalAttempt] tells us whether the worker still
+     * has retries left, so we only persist a FAILED row when we've truly given up
+     * (avoids a flurry of FAILED history rows during retries).
+     */
+    suspend fun process(call: MissedCall, isFinalAttempt: Boolean): ProcessOutcome {
         val settings = settingsStore.settings.first()
 
         if (!settings.enabled) {
             record(call, ForwardStatus.SKIPPED_DISABLED, null, "Forwarding disabled")
-            return
+            return ProcessOutcome.Handled
         }
         if (settings.botToken.isBlank() || settings.chatId.isBlank()) {
             record(call, ForwardStatus.FAILED, null, "Telegram not configured")
             Notifier.show(appContext, "Not forwarded", "Set the Telegram bot token and chat id.")
-            return
+            return ProcessOutcome.Handled
+        }
+
+        // --- SIM filter: only respond to the configured SIM(s) ---
+        if (settings.simFilter != Settings.SIM_BOTH) {
+            val slot = call.simSlot
+            if (slot == null) {
+                // Couldn't determine which SIM received the call. Forward anyway —
+                // missing a lead is worse than an occasional extra notification.
+                Log.w(TAG, "SIM slot unknown; forwarding despite filter=${settings.simFilter}")
+            } else if (slot != settings.simFilter) {
+                record(call, ForwardStatus.SKIPPED_SIM, null,
+                    "Call on SIM $slot; filter set to SIM ${settings.simFilter}")
+                return ProcessOutcome.Handled
+            }
         }
 
         // --- Dedup: skip if we already notified for this number within the window ---
@@ -44,7 +72,7 @@ class MissedCallProcessor(
             if (recent != null) {
                 record(call, ForwardStatus.SUPPRESSED, null,
                     "Within ${settings.dedupMinutes} min of a previous notification")
-                return
+                return ProcessOutcome.Handled
             }
         }
 
@@ -60,7 +88,7 @@ class MissedCallProcessor(
                     "Daily cap reached",
                     "Skipped ${call.number.ifBlank { "unknown" }}. Limit ${settings.dailyMessageCap}/24h."
                 )
-                return
+                return ProcessOutcome.Handled
             }
         }
 
@@ -68,14 +96,23 @@ class MissedCallProcessor(
         val result = withContext(Dispatchers.IO) {
             TelegramClient.sendMessage(settings.botToken, settings.chatId, body)
         }
-        when (result) {
+        return when (result) {
             is TelegramResult.Success -> {
                 record(call, ForwardStatus.SENT, body, null)
                 Notifier.show(appContext, "Lead sent to Telegram", call.number.ifBlank { "unknown" })
+                ProcessOutcome.Handled
             }
             is TelegramResult.Failure -> {
-                record(call, ForwardStatus.FAILED, body, result.reason)
-                Notifier.show(appContext, "Telegram send failed", result.reason)
+                if (result.retryable && !isFinalAttempt) {
+                    // Don't record yet; let WorkManager retry with backoff.
+                    Log.w(TAG, "Transient send failure, will retry: ${result.reason}")
+                    ProcessOutcome.Retry(result.reason)
+                } else {
+                    val detail = if (result.retryable) "${result.reason} (gave up after retries)" else result.reason
+                    record(call, ForwardStatus.FAILED, body, detail)
+                    Notifier.show(appContext, "Telegram send failed", detail)
+                    ProcessOutcome.Handled
+                }
             }
         }
     }

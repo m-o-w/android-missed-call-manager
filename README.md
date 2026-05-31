@@ -78,7 +78,14 @@ Requirements: JDK 17, Android SDK 34. APK at `app/build/outputs/apk/debug/`.
 
 - Missed-call detection (PHONE_STATE transitions + call-log confirmation),
   excludes rejected calls where the OS distinguishes them.
+- **SIM filter**: respond to missed calls on SIM 1, SIM 2, or both. If a call's
+  SIM can't be determined (OEM inconsistency), it's forwarded anyway so leads
+  aren't lost.
 - Telegram delivery with a pre-filled `wa.me` greeting link.
+- **Durable retry**: the send runs in WorkManager with a network constraint and
+  exponential backoff, so transient failures (no signal, flaky data, Telegram
+  5xx/429) retry automatically and survive app/process restarts. Permanent
+  errors (bad token/chat id) don't retry.
 - Per-number dedup window (default 60 min).
 - Daily message cap.
 - Configurable greeting + message template (`{number}` `{time}` `{wa}`).
@@ -86,7 +93,7 @@ Requirements: JDK 17, Android SDK 34. APK at `app/build/outputs/apk/debug/`.
 - Save / discard, send-test-message, in-app setup guide.
 - Self-dismissing permission and battery prompts.
 - Forward history with per-call status (sent / suppressed / capped / failed /
-  disabled).
+  disabled / other SIM).
 
 ## Configuration internals
 
@@ -102,12 +109,15 @@ Requirements: JDK 17, Android SDK 34. APK at `app/build/outputs/apk/debug/`.
 app/src/main/java/com/example/missedcallforwarder/
   ForwarderApp.kt              Application + notification channel
   core/
-    CallLogReader.kt           Reads latest missed call from the call log
-    MissedCallProcessor.kt     Dedup + cap + message build + Telegram send + log
+    CallLogReader.kt           Reads latest missed call (+ SIM slot) from the log
+    SimResolver.kt             Maps call-log phone account to a physical SIM slot
+    MissedCallProcessor.kt     Gating (enabled/SIM/dedup/cap) + one send attempt
     MessageBuilder.kt          Template + wa.me link with greeting
     PhoneNumbers.kt            wa.me formatting via libphonenumber
     DeviceRegion.kt            SIM/network region detection
     TelegramClient.kt          Bot API: sendMessage / getUpdates / getMe
+  work/
+    SendWorker.kt              Durable WorkManager send with backoff retry
   data/                        Room DB, ForwardLog, SettingsStore
   notify/Notifier.kt           Status notifications
   receiver/                    CallReceiver (PHONE_STATE), BootReceiver

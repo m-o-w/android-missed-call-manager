@@ -4,7 +4,7 @@ import androidx.room.Entity
 import androidx.room.PrimaryKey
 
 /** Outcome of attempting to forward a single missed call. */
-enum class ForwardStatus { SENT, SUPPRESSED, FAILED, SKIPPED_DISABLED, CAPPED }
+enum class ForwardStatus { SENT, SUPPRESSED, FAILED, SKIPPED_DISABLED, CAPPED, SKIPPED_SIM }
 
 /**
  * One row per detected missed call. Doubles as:

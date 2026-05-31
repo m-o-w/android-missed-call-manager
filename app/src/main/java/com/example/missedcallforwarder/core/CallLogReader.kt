@@ -7,7 +7,9 @@ import android.util.Log
 data class MissedCall(
     val number: String,
     val time: Long,
-    val callLogId: Long
+    val callLogId: Long,
+    /** 1-based SIM slot that received the call (1 or 2), or null if unknown. */
+    val simSlot: Int?
 )
 
 /**
@@ -31,7 +33,8 @@ object CallLogReader {
             CallLog.Calls._ID,
             CallLog.Calls.NUMBER,
             CallLog.Calls.TYPE,
-            CallLog.Calls.DATE
+            CallLog.Calls.DATE,
+            CallLog.Calls.PHONE_ACCOUNT_ID
         )
         // Pull recent rows and pick the newest qualifying one.
         val selection = "${CallLog.Calls.DATE} >= ?"
@@ -46,6 +49,7 @@ object CallLogReader {
                 val numIdx = c.getColumnIndexOrThrow(CallLog.Calls.NUMBER)
                 val typeIdx = c.getColumnIndexOrThrow(CallLog.Calls.TYPE)
                 val dateIdx = c.getColumnIndexOrThrow(CallLog.Calls.DATE)
+                val acctIdx = c.getColumnIndex(CallLog.Calls.PHONE_ACCOUNT_ID)
 
                 while (c.moveToNext()) {
                     val type = c.getInt(typeIdx)
@@ -53,7 +57,9 @@ object CallLogReader {
                         val number = c.getString(numIdx) ?: ""
                         val date = c.getLong(dateIdx)
                         val id = c.getLong(idIdx)
-                        return@use MissedCall(number, date, id)
+                        val acct = if (acctIdx >= 0) c.getString(acctIdx) else null
+                        val slot = SimResolver.slotForPhoneAccountId(context, acct)
+                        return@use MissedCall(number, date, id, slot)
                     }
                     // REJECTED_TYPE and others are ignored.
                 }

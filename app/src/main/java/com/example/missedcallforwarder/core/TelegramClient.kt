@@ -11,7 +11,7 @@ import java.nio.charset.StandardCharsets
 /** Result of a Telegram API call. */
 sealed class TelegramResult {
     object Success : TelegramResult()
-    data class Failure(val reason: String) : TelegramResult()
+    data class Failure(val reason: String, val retryable: Boolean) : TelegramResult()
 }
 
 /**
@@ -29,10 +29,14 @@ object TelegramClient {
     private const val BASE = "https://api.telegram.org"
     private const val TIMEOUT_MS = 20_000
 
-    /** Sends [text] to [chatId]. Returns a descriptive failure on any error. */
+    /**
+     * Sends [text] to [chatId] once. Returns a descriptive failure on any error,
+     * with [retryable] indicating whether a retry could plausibly succeed
+     * (network/timeout/5xx/429) versus a permanent error (bad token/chat id).
+     */
     fun sendMessage(botToken: String, chatId: String, text: String): TelegramResult {
-        if (botToken.isBlank()) return TelegramResult.Failure("Bot token is empty")
-        if (chatId.isBlank()) return TelegramResult.Failure("Chat id is empty")
+        if (botToken.isBlank()) return TelegramResult.Failure("Bot token is empty", retryable = false)
+        if (chatId.isBlank()) return TelegramResult.Failure("Chat id is empty", retryable = false)
 
         val body = JSONObject()
             .put("chat_id", chatId)
@@ -42,14 +46,18 @@ object TelegramClient {
 
         return try {
             val (code, payload) = postJson("$BASE/bot$botToken/sendMessage", body)
-            if (code in 200..299) {
-                TelegramResult.Success
-            } else {
-                TelegramResult.Failure(extractApiError(payload, code))
+            when {
+                code in 200..299 -> TelegramResult.Success
+                // 429 (rate limit) and 5xx are transient; 4xx (except 429) are permanent.
+                code == 429 || code in 500..599 ->
+                    TelegramResult.Failure(extractApiError(payload, code), retryable = true)
+                else ->
+                    TelegramResult.Failure(extractApiError(payload, code), retryable = false)
             }
         } catch (e: Exception) {
+            // Network/IO errors (no connectivity, DNS, timeout) are worth retrying.
             Log.e(TAG, "sendMessage failed", e)
-            TelegramResult.Failure(e.message ?: e.javaClass.simpleName)
+            TelegramResult.Failure(e.message ?: e.javaClass.simpleName, retryable = true)
         }
     }
 

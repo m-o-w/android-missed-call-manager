@@ -5,10 +5,8 @@ import android.content.Context
 import android.content.Intent
 import android.telephony.TelephonyManager
 import android.util.Log
-import com.example.missedcallforwarder.ForwarderApp
 import com.example.missedcallforwarder.core.CallLogReader
-import com.example.missedcallforwarder.core.MissedCallProcessor
-import com.example.missedcallforwarder.data.SettingsStore
+import com.example.missedcallforwarder.work.SendWorker
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -64,12 +62,11 @@ class CallReceiver : BroadcastReceiver() {
     }
 
     private fun handleSuspectedMiss(context: Context, ringedAt: Long) {
-        val app = context.applicationContext as ForwarderApp
         val pending = goAsync()
 
         CoroutineScope(Dispatchers.IO).launch {
             try {
-                // Call log lags the broadcast; retry a few times.
+                // Call log lags the broadcast; retry a few times to read the number.
                 val since = (if (ringedAt > 0) ringedAt else System.currentTimeMillis()) - 5_000L
                 var call = CallLogReader.latestMissedSince(context, since)
                 var attempts = 0
@@ -91,12 +88,10 @@ class CallReceiver : BroadcastReceiver() {
                 }
                 lastHandledCallLogId = call.callLogId
 
-                val processor = MissedCallProcessor(
-                    appContext = context.applicationContext,
-                    db = app.database,
-                    settingsStore = SettingsStore(context.applicationContext)
-                )
-                processor.process(call)
+                // Hand off the actual send to WorkManager: it survives the ~10s
+                // receiver limit and process death, waits for network, and retries
+                // transient failures with backoff.
+                SendWorker.enqueue(context.applicationContext, call)
             } catch (t: Throwable) {
                 Log.e(TAG, "Error processing missed call", t)
             } finally {

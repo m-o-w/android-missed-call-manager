@@ -31,6 +31,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.missedcallforwarder.core.DeviceRegion
+import com.example.missedcallforwarder.core.SimResolver
 import com.example.missedcallforwarder.data.ForwardLog
 import com.example.missedcallforwarder.data.ForwardStatus
 import com.example.missedcallforwarder.data.Settings
@@ -81,6 +82,7 @@ private fun SettingsForm(
     var permissionsGranted by remember { mutableStateOf(hasEssentialPermissions(context)) }
     var batteryExempt by remember { mutableStateOf(isBatteryExempt(context)) }
     val detectedRegion = remember(permissionsGranted) { DeviceRegion.detect(context) }
+    var activeSims by remember { mutableStateOf(SimResolver.activeSims(context)) }
     var showSetupHelp by remember { mutableStateOf(false) }
 
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -89,6 +91,7 @@ private fun SettingsForm(
             if (event == Lifecycle.Event.ON_RESUME) {
                 permissionsGranted = hasEssentialPermissions(context)
                 batteryExempt = isBatteryExempt(context)
+                activeSims = SimResolver.activeSims(context)
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -99,6 +102,7 @@ private fun SettingsForm(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { _ ->
         permissionsGranted = hasEssentialPermissions(context)
+        activeSims = SimResolver.activeSims(context)
     }
 
     val snackbarHost = remember { SnackbarHostState() }
@@ -261,7 +265,13 @@ private fun SettingsForm(
             // --- Limits ---
             ElevatedCard {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text("Limits", style = MaterialTheme.typography.titleMedium)
+                    Text("Call source & limits", style = MaterialTheme.typography.titleMedium)
+
+                    SimFilterDropdown(
+                        activeSims = activeSims,
+                        selected = draft.simFilter,
+                        onSelected = { v -> draft = draft.copy(simFilter = v) }
+                    )
 
                     OutlinedTextField(
                         value = draft.dedupMinutesText,
@@ -405,6 +415,49 @@ private fun SetupStep(num: String, text: String) {
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SimFilterDropdown(
+    activeSims: List<Pair<Int, String>>,
+    selected: Int,
+    onSelected: (Int) -> Unit
+) {
+    // Build options: "Both SIMs" plus a per-slot entry. Fall back to generic
+    // SIM 1 / SIM 2 labels if carrier names aren't available (no permission).
+    val options = buildList {
+        add(Settings.SIM_BOTH to "Both SIMs")
+        if (activeSims.isEmpty()) {
+            add(Settings.SIM_1 to "SIM 1")
+            add(Settings.SIM_2 to "SIM 2")
+        } else {
+            activeSims.forEach { (slot, carrier) -> add(slot to "SIM $slot ($carrier)") }
+        }
+    }
+    var expanded by remember { mutableStateOf(false) }
+    val selectedLabel = options.firstOrNull { it.first == selected }?.second
+        ?: "Both SIMs"
+
+    ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = it }) {
+        OutlinedTextField(
+            value = selectedLabel,
+            onValueChange = {},
+            readOnly = true,
+            label = { Text("Respond to calls on") },
+            supportingText = { Text("If a call's SIM can't be determined, it's forwarded anyway.") },
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+            modifier = Modifier.menuAnchor().fillMaxWidth()
+        )
+        ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            options.forEach { (value, label) ->
+                DropdownMenuItem(
+                    text = { Text(label) },
+                    onClick = { onSelected(value); expanded = false }
+                )
+            }
+        }
+    }
+}
+
 @Composable
 private fun HistoryRow(entry: ForwardLog) {
     val fmt = remember { SimpleDateFormat("MMM d, HH:mm", Locale.getDefault()) }
@@ -430,6 +483,7 @@ private fun StatusChip(status: ForwardStatus) {
         ForwardStatus.FAILED -> "failed"
         ForwardStatus.SKIPPED_DISABLED -> "disabled"
         ForwardStatus.CAPPED -> "capped"
+        ForwardStatus.SKIPPED_SIM -> "other SIM"
     }
     AssistChip(onClick = {}, label = { Text(label) })
 }
