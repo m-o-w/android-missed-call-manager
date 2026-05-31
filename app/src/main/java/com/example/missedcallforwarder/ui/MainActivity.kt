@@ -17,12 +17,20 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Error
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
@@ -84,6 +92,23 @@ private fun SettingsForm(
     val detectedRegion = remember(permissionsGranted) { DeviceRegion.detect(context) }
     var activeSims by remember { mutableStateOf(SimResolver.activeSims(context)) }
     var showSetupHelp by remember { mutableStateOf(false) }
+    var tokenVisible by remember { mutableStateOf(false) }
+
+    val connection by vm.connection.collectAsStateWithLifecycle()
+
+    // Verify the token whenever the draft token settles (debounced). This drives
+    // the connection status indicator without a manual button.
+    LaunchedEffect(draft.botToken) {
+        val token = draft.botToken.trim()
+        if (token.isBlank()) {
+            vm.verifyToken("")
+        } else {
+            kotlinx.coroutines.delay(600) // debounce typing
+            vm.verifyToken(token)
+        }
+    }
+
+    val telegramConfigured = draft.botToken.isNotBlank() && draft.chatId.isNotBlank()
 
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
@@ -147,6 +172,30 @@ private fun SettingsForm(
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
+            // --- First-run hint: shown until Telegram is configured ---
+            if (!telegramConfigured) {
+                ElevatedCard(
+                    colors = CardDefaults.elevatedCardColors(
+                        containerColor = MaterialTheme.colorScheme.primaryContainer
+                    )
+                ) {
+                    Row(
+                        Modifier.padding(16.dp).fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text("Get started", style = MaterialTheme.typography.titleMedium)
+                            Text(
+                                "Connect a Telegram bot so missed calls reach you.",
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                        TextButton(onClick = { showSetupHelp = true }) { Text("Set up") }
+                    }
+                }
+            }
+
             if (!permissionsGranted) {
                 ElevatedCard {
                     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -193,12 +242,25 @@ private fun SettingsForm(
                         TextButton(onClick = { showSetupHelp = true }) { Text("How to set up") }
                     }
 
+                    ConnectionStatusRow(connection)
+
                     OutlinedTextField(
                         value = draft.botToken,
                         onValueChange = { v -> draft = draft.copy(botToken = v) },
                         label = { Text("Bot token") },
                         supportingText = { Text("From @BotFather. Keep this secret.") },
                         singleLine = true,
+                        visualTransformation = if (tokenVisible) VisualTransformation.None
+                            else PasswordVisualTransformation(),
+                        trailingIcon = {
+                            IconButton(onClick = { tokenVisible = !tokenVisible }) {
+                                Icon(
+                                    imageVector = if (tokenVisible) Icons.Filled.VisibilityOff
+                                        else Icons.Filled.Visibility,
+                                    contentDescription = if (tokenVisible) "Hide token" else "Show token"
+                                )
+                            }
+                        },
                         modifier = Modifier.fillMaxWidth()
                     )
 
@@ -412,6 +474,33 @@ private fun SetupStep(num: String, text: String) {
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(num, style = MaterialTheme.typography.titleSmall)
         Text(text, style = MaterialTheme.typography.bodyMedium)
+    }
+}
+
+@Composable
+private fun ConnectionStatusRow(status: ConnectionStatus) {
+    val (text, color, icon) = when (status) {
+        is ConnectionStatus.Connected ->
+            Triple("Connected as @${status.botUsername}", Color(0xFF2E7D32), Icons.Filled.CheckCircle)
+        ConnectionStatus.Checking ->
+            Triple("Checking connection…", MaterialTheme.colorScheme.onSurfaceVariant, null)
+        ConnectionStatus.Invalid ->
+            Triple("Token rejected by Telegram", MaterialTheme.colorScheme.error, Icons.Filled.Error)
+        ConnectionStatus.NotConfigured ->
+            Triple("No bot token set", MaterialTheme.colorScheme.onSurfaceVariant, null)
+        ConnectionStatus.Unknown ->
+            Triple("Not checked yet", MaterialTheme.colorScheme.onSurfaceVariant, null)
+    }
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        if (status is ConnectionStatus.Checking) {
+            CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+        } else if (icon != null) {
+            Icon(icon, contentDescription = null, tint = color, modifier = Modifier.size(18.dp))
+        }
+        Text(text, color = color, style = MaterialTheme.typography.bodyMedium)
     }
 }
 

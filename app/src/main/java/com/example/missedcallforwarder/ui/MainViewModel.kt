@@ -11,16 +11,30 @@ import com.example.missedcallforwarder.data.ForwardLog
 import com.example.missedcallforwarder.data.Settings
 import com.example.missedcallforwarder.data.SettingsStore
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+/** Connection state for the configured Telegram bot token. */
+sealed class ConnectionStatus {
+    object Unknown : ConnectionStatus()        // not checked yet
+    object NotConfigured : ConnectionStatus()  // token blank
+    object Checking : ConnectionStatus()
+    data class Connected(val botUsername: String) : ConnectionStatus()
+    object Invalid : ConnectionStatus()        // token rejected by Telegram
+}
+
 class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     private val store = SettingsStore(app)
     private val db = (app as ForwarderApp).database
+
+    private val _connection = MutableStateFlow<ConnectionStatus>(ConnectionStatus.Unknown)
+    val connection: StateFlow<ConnectionStatus> = _connection
 
     val settings = store.settings.stateIn(
         viewModelScope, SharingStarted.WhileSubscribed(5_000), null
@@ -41,6 +55,27 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun clearHistory() {
         viewModelScope.launch { db.forwardLogDao().clear() }
+    }
+
+    /**
+     * Validates [token] against Telegram (getMe) and updates [connection]. Debounced
+     * by the caller. A blank token reports NotConfigured without a network call.
+     */
+    fun verifyToken(token: String) {
+        val trimmed = token.trim()
+        if (trimmed.isBlank()) {
+            _connection.value = ConnectionStatus.NotConfigured
+            return
+        }
+        _connection.value = ConnectionStatus.Checking
+        viewModelScope.launch {
+            val username = withContext(Dispatchers.IO) { TelegramClient.verifyToken(trimmed) }
+            _connection.value = if (username != null) {
+                ConnectionStatus.Connected(username)
+            } else {
+                ConnectionStatus.Invalid
+            }
+        }
     }
 
     /**
