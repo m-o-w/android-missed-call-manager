@@ -5,8 +5,9 @@
     <uses-permission android:name="android.permission.READ_PHONE_STATE" />
     <uses-permission android:name="android.permission.READ_CALL_LOG" />
 
-    <!-- Send the forwarding SMS silently in the background -->
-    <uses-permission android:name="android.permission.SEND_SMS" />
+    <!-- Deliver the notification to Telegram over HTTPS -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
     <!-- Re-arm after device reboot -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
@@ -16,9 +17,6 @@
 
     <!-- Used to prompt the user to exempt the app from battery optimization -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
-
-    <!-- Dual-SIM: read which subscriptions exist so the user can pick the sending SIM -->
-    <uses-permission android:name="android.permission.READ_PHONE_NUMBERS" />
 
     <application
         android:name=".ForwarderApp"

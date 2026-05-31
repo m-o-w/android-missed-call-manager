@@ -7,8 +7,12 @@ import java.util.Date
 import java.util.Locale
 
 /**
- * Builds the forward SMS body from the template. Shared by the live forward
- * path and the "send test" action so both produce identical output.
+ * Builds the Telegram notification body from the template. Shared by the live
+ * forward path and the "send test" action so both produce identical output.
+ *
+ * The {wa} placeholder becomes a wa.me click-to-chat link for the caller, with
+ * the configured greeting pre-filled so one tap on the primary phone opens the
+ * lead's WhatsApp chat ready to send.
  */
 object MessageBuilder {
 
@@ -17,13 +21,8 @@ object MessageBuilder {
     fun build(context: Context, number: String, timeMillis: Long, settings: Settings): String {
         val numberText = number.ifBlank { "unknown" }
         val timeText = timeFmt.format(Date(timeMillis))
-        val waUrl = if (settings.includeWhatsAppLink) {
-            // Use the user override if set, else auto-detect from SIM/network.
-            val region = DeviceRegion.resolveRegion(context, settings.defaultCountryCode)
-            PhoneNumbers.waMeUrl(number, region) ?: "(unavailable)"
-        } else {
-            ""
-        }
+        val region = DeviceRegion.resolveRegion(context, settings.defaultCountryCode)
+        val waUrl = PhoneNumbers.waMeUrl(number, region, settings.greeting) ?: "(link unavailable)"
         return settings.messageTemplate
             .replace("{number}", numberText)
             .replace("{time}", timeText)

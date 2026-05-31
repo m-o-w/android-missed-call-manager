@@ -34,6 +34,10 @@ object PhoneNumbers {
         }
     }
 
-    fun waMeUrl(raw: String, defaultRegion: String?): String? =
-        toWaMeDigits(raw, defaultRegion)?.let { "https://wa.me/$it" }
+    fun waMeUrl(raw: String, defaultRegion: String?, greeting: String? = null): String? {
+        val digits = toWaMeDigits(raw, defaultRegion) ?: return null
+        val base = "https://wa.me/$digits"
+        val text = greeting?.takeIf { it.isNotBlank() } ?: return base
+        return "$base?text=${java.net.URLEncoder.encode(text, "UTF-8")}"
+    }
 }

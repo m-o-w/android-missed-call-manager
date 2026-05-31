@@ -5,15 +5,17 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.missedcallforwarder.ForwarderApp
 import com.example.missedcallforwarder.core.MessageBuilder
-import com.example.missedcallforwarder.core.SmsResult
-import com.example.missedcallforwarder.core.SmsSender
+import com.example.missedcallforwarder.core.TelegramClient
+import com.example.missedcallforwarder.core.TelegramResult
 import com.example.missedcallforwarder.data.ForwardLog
 import com.example.missedcallforwarder.data.Settings
 import com.example.missedcallforwarder.data.SettingsStore
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class MainViewModel(app: Application) : AndroidViewModel(app) {
 
@@ -42,23 +44,44 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * Sends a one-off test SMS using the *saved* settings (destination, template,
-     * SIM, wa.me option), with [sampleNumber] standing in for a caller. Bypasses
-     * the enabled flag, dedup, and the daily cap so testing always goes through.
-     * Reports the outcome via [onResult] on the main thread.
+     * Sends a one-off test message to Telegram using the *saved* settings, with
+     * [sampleNumber] standing in for a caller. Bypasses enabled/dedup/cap so a
+     * test always goes through. Reports the outcome via [onResult].
      */
-    fun sendTestSms(sampleNumber: String, onResult: (String) -> Unit) {
+    fun sendTest(sampleNumber: String, onResult: (String) -> Unit) {
         viewModelScope.launch {
             val s = store.settings.first()
-            if (s.destinationNumber.isBlank()) {
-                onResult("Set and save a destination number first")
+            if (s.botToken.isBlank() || s.chatId.isBlank()) {
+                onResult("Save a bot token and chat id first")
                 return@launch
             }
             val body = MessageBuilder.build(getApplication(), sampleNumber, System.currentTimeMillis(), s)
-            val prefixed = "[TEST] $body"
-            when (val r = SmsSender.send(getApplication(), s.destinationNumber, prefixed, s.sendSubscriptionId)) {
-                is SmsResult.Success -> onResult("Test SMS sent to ${s.destinationNumber}")
-                is SmsResult.Failure -> onResult("Test failed: ${r.reason}")
+            val result = withContext(Dispatchers.IO) {
+                TelegramClient.sendMessage(s.botToken, s.chatId, "[TEST] $body")
+            }
+            when (result) {
+                is TelegramResult.Success -> onResult("Test message sent to Telegram")
+                is TelegramResult.Failure -> onResult("Test failed: ${result.reason}")
+            }
+        }
+    }
+
+    /**
+     * Calls getUpdates to find the chat id of whoever last messaged the bot, then
+     * saves it into the draft via [onResult]. The user must have tapped Start /
+     * sent the bot a message first.
+     */
+    fun detectChatId(botToken: String, onResult: (chatId: String?, message: String) -> Unit) {
+        viewModelScope.launch {
+            if (botToken.isBlank()) {
+                onResult(null, "Enter the bot token first")
+                return@launch
+            }
+            val id = withContext(Dispatchers.IO) { TelegramClient.detectChatId(botToken) }
+            if (id != null) {
+                onResult(id, "Detected chat id: $id")
+            } else {
+                onResult(null, "No chat found. Open your bot in Telegram, tap Start, then retry.")
             }
         }
     }

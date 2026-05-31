@@ -8,14 +8,14 @@ import com.example.missedcallforwarder.data.ForwardStatus
 import com.example.missedcallforwarder.data.Settings
 import com.example.missedcallforwarder.data.SettingsStore
 import com.example.missedcallforwarder.notify.Notifier
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withContext
 
 /**
- * Decides what to do with a detected missed call: dedup, build the message
- * (with optional wa.me link), send the SMS, and record the outcome.
- *
- * Pure-ish: all side effects (DB, SMS, notification) are explicit so the flow
- * is easy to follow.
+ * Decides what to do with a detected missed call: dedup, daily cap, build the
+ * Telegram message (with a pre-filled wa.me link), deliver it, and log the
+ * outcome.
  */
 class MissedCallProcessor(
     private val appContext: Context,
@@ -30,58 +30,55 @@ class MissedCallProcessor(
             record(call, ForwardStatus.SKIPPED_DISABLED, null, "Forwarding disabled")
             return
         }
-        if (settings.destinationNumber.isBlank()) {
-            record(call, ForwardStatus.FAILED, null, "No destination number set")
-            Notifier.show(appContext, "Not forwarded", "Set a destination number in the app.")
+        if (settings.botToken.isBlank() || settings.chatId.isBlank()) {
+            record(call, ForwardStatus.FAILED, null, "Telegram not configured")
+            Notifier.show(appContext, "Not forwarded", "Set the Telegram bot token and chat id.")
             return
         }
 
-        // --- Dedup: skip if we already forwarded this number within the window ---
+        // --- Dedup: skip if we already notified for this number within the window ---
         val windowMs = settings.dedupMinutes.toLong() * 60_000L
         if (windowMs > 0 && call.number.isNotBlank()) {
             val since = System.currentTimeMillis() - windowMs
             val recent = db.forwardLogDao().lastSentForNumberSince(call.number, since)
             if (recent != null) {
                 record(call, ForwardStatus.SUPPRESSED, null,
-                    "Within ${settings.dedupMinutes} min of a previous forward")
+                    "Within ${settings.dedupMinutes} min of a previous notification")
                 return
             }
         }
 
-        // --- Daily cost cap: stop sending once the rolling-24h limit is hit ---
-        if (settings.dailySmsCap > 0) {
+        // --- Daily cap: stop once the rolling-24h limit is hit ---
+        if (settings.dailyMessageCap > 0) {
             val since = System.currentTimeMillis() - DAY_MS
             val sentToday = db.forwardLogDao().sentCountSince(since)
-            if (sentToday >= settings.dailySmsCap) {
+            if (sentToday >= settings.dailyMessageCap) {
                 record(call, ForwardStatus.CAPPED, null,
-                    "Daily cap reached ($sentToday/${settings.dailySmsCap} in last 24h)")
+                    "Daily cap reached ($sentToday/${settings.dailyMessageCap} in last 24h)")
                 Notifier.show(
                     appContext,
-                    "Daily SMS cap reached",
-                    "Skipped forwarding ${call.number.ifBlank { "unknown" }}. " +
-                        "Limit is ${settings.dailySmsCap} per 24h."
+                    "Daily cap reached",
+                    "Skipped ${call.number.ifBlank { "unknown" }}. Limit ${settings.dailyMessageCap}/24h."
                 )
                 return
             }
         }
 
-        val body = buildMessage(call, settings)
-        when (val result = SmsSender.send(
-            appContext, settings.destinationNumber, body, settings.sendSubscriptionId
-        )) {
-            is SmsResult.Success -> {
+        val body = MessageBuilder.build(appContext, call.number, call.time, settings)
+        val result = withContext(Dispatchers.IO) {
+            TelegramClient.sendMessage(settings.botToken, settings.chatId, body)
+        }
+        when (result) {
+            is TelegramResult.Success -> {
                 record(call, ForwardStatus.SENT, body, null)
-                Notifier.show(appContext, "Missed call forwarded", body)
+                Notifier.show(appContext, "Lead sent to Telegram", call.number.ifBlank { "unknown" })
             }
-            is SmsResult.Failure -> {
+            is TelegramResult.Failure -> {
                 record(call, ForwardStatus.FAILED, body, result.reason)
-                Notifier.show(appContext, "Forward failed", result.reason)
+                Notifier.show(appContext, "Telegram send failed", result.reason)
             }
         }
     }
-
-    private fun buildMessage(call: MissedCall, settings: Settings): String =
-        MessageBuilder.build(appContext, call.number, call.time, settings)
 
     private suspend fun record(
         call: MissedCall,
